@@ -56,7 +56,7 @@ def default_command_info(command):
     """
 
     doc = default_command_documentation(command)
-    return doc.split('\n')[1].strip(".").lstrip()
+    return doc.splitlines()[1].strip(".").lstrip()
 
 
 def default_command_documentation(command):
@@ -68,7 +68,7 @@ def default_command_documentation(command):
     :rtype: str
     """
 
-    return default_doc(command).rstrip('\n')
+    return default_doc(command).rstrip('\r\n')
 
 
 class SubcommandMain():
