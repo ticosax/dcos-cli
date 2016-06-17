@@ -4,8 +4,8 @@ import functools
 import six
 from dcos import emitting, http, util
 from dcos.errors import (DCOSAuthenticationException,
-                         DCOSAuthorizationException, DCOSException,
-                         DCOSHTTPException, DefaultError)
+                         DCOSAuthorizationException, DCOSBadRequest,
+                         DCOSException, DCOSHTTPException, DefaultError)
 
 from six.moves import urllib
 
@@ -228,7 +228,7 @@ class Cosmos():
             content_type = response.headers.get('Content-Type')
             if content_type is None:
                 raise DCOSHTTPException(response)
-            elif _get_header("error") in content_type:
+            elif _get_header("error", "v1") in content_type:
                 logger.debug("Error: {}".format(response.json()))
                 error_msg = _format_error_message(response.json())
                 raise DCOSException(error_msg)
@@ -237,7 +237,7 @@ class Cosmos():
         return check_for_cosmos_error
 
     @cosmos_error
-    def cosmos_post(self, request, params):
+    def cosmos_post(self, request, params, version="v2"):
         """Request to cosmos server
 
         :param request: type of request
@@ -252,8 +252,10 @@ class Cosmos():
                                    'package/{}'.format(request))
         try:
             response = http.post(url, json=params,
-                                 headers=_get_cosmos_header(request))
-            if not _check_cosmos_header(request, response):
+                                 headers=_get_cosmos_header(
+                                     request, version=version))
+            # if failed requesting v2, try v1 request
+            if not _check_cosmos_header(request, response, version):
                 raise DCOSException(
                     "Server returned incorrect response type: {}".format(
                         response.headers))
@@ -261,6 +263,11 @@ class Cosmos():
             raise
         except DCOSAuthorizationException:
             raise
+        except DCOSBadRequest as e:
+            if version == "v2":
+                response = self.cosmos_post(request, params, version="v1")
+            else:
+                response = e.response
         except DCOSHTTPException as e:
             # let non authentication responses be handled by `cosmos_error` so
             # we can expose errors reported by cosmos
@@ -282,6 +289,8 @@ class CosmosPackageVersion():
         response = Cosmos(url).cosmos_post("describe", params)
 
         package_info = response.json()
+        logger.debug("\n\n\n{}\n\n\n".format(package_info))
+        logger.debug("HIII")
         self._package_json = package_info.get("package")
         self._package_version = package_version or \
             self._package_json.get("version")
@@ -451,31 +460,37 @@ class CosmosPackageVersion():
         return list(response.json().get("results").keys())
 
 
-def _get_header(request_type):
+def _get_header(request_type, version):
     """Returns header str for talking with cosmos
 
     :param request_type: name of specified request (ie uninstall-request)
     :type request_type: str
+    :param verison: version of request
+    :type version: str
     :returns: header information
     :rtype: str
     """
 
     return ("application/vnd.dcos.package.{}+json;"
-            "charset=utf-8;version=v1").format(request_type)
+            "charset=utf-8;version={}").format(request_type, version)
 
 
-def _get_cosmos_header(request_name):
+def _get_cosmos_header(request_name, version):
     """Returns header fields needed for a valid request to cosmos
 
     :param request_name: name of specified request (ie uninstall)
     :type request_name: str
+    :param verison: version of request
+    :type version: str
     :returns: dict of required headers
     :rtype: {}
     """
 
     request_name = request_name.replace("/", ".")
-    return {"Accept": _get_header("{}-response".format(request_name)),
-            "Content-Type": _get_header("{}-request".format(request_name))}
+    return {"Accept": _get_header("{}-response".format(request_name),
+                                  version),
+            "Content-Type": _get_header("{}-request".format(request_name),
+                                        "v1")}
 
 
 def _get_capabilities_header():
@@ -489,20 +504,22 @@ def _get_capabilities_header():
     return {"Accept": header, "Content-Type": header}
 
 
-def _check_cosmos_header(request_name, response):
+def _check_cosmos_header(request_name, response, version):
     """Validate that cosmos returned correct header for request
 
     :param request_type: name of specified request (ie uninstall-request)
     :type request_type: str
     :param response: response object
     :type response: Response
+    :param verison: version of request
+    :type version: str
     :returns: whether or not we got expected response
     :rtype: bool
     """
 
     request_name = request_name.replace("/", ".")
     rsp = "{}-response".format(request_name)
-    return _get_header(rsp) in response.headers.get('Content-Type')
+    return _get_header(rsp, version) in response.headers.get('Content-Type')
 
 
 def _format_error_message(error):
